@@ -16,6 +16,7 @@
 #include "sync_entitystreamtemplate_handler.h"
 #include "common/timestamp.h"
 #include "common/kbeversion.h"
+#include "common/sha1.h"
 #include "network/common.h"
 #include "network/tcp_packet.h"
 #include "network/udp_packet.h"
@@ -254,7 +255,7 @@ Baseapp::~Baseapp()
 }
 
 //-------------------------------------------------------------------------------------	
-bool Baseapp::canShutdown()
+ShutdownHandler::CAN_SHUTDOWN_STATE Baseapp::canShutdown()
 {
 	if (getEntryScript().get() && PyObject_HasAttrString(getEntryScript().get(), "onReadyForShutDown") > 0)
 	{
@@ -269,36 +270,36 @@ bool Baseapp::canShutdown()
 			Py_DECREF(pyResult);
 
 			if (isReady)
-				return true;
+				return ShutdownHandler::CAN_SHUTDOWN_STATE_USER_TRUE;
 			else
-				return false;
+				return ShutdownHandler::CAN_SHUTDOWN_STATE_USER_FALSE;
 		}
 		else
 		{
 			SCRIPT_ERROR_CHECK();
-			return false;
+			return ShutdownHandler::CAN_SHUTDOWN_STATE_USER_FALSE;
 		}
 	}
-	
+
 	Components::COMPONENTS& cellapp_components = Components::getSingleton().getComponents(CELLAPP_TYPE);
-	if(cellapp_components.size() > 0)
+	if (cellapp_components.size() > 0)
 	{
 		std::string s;
-		for(size_t i=0; i<cellapp_components.size(); ++i)
+		for (size_t i = 0; i<cellapp_components.size(); ++i)
 		{
 			s += fmt::format("{}, ", cellapp_components[i].cid);
 		}
 
-		INFO_MSG(fmt::format("Baseapp::canShutdown(): Waiting for cellapp[{}] destruction!\n", 
+		INFO_MSG(fmt::format("Baseapp::canShutdown(): Waiting for cellapp[{}] destruction!\n",
 			s));
 
-		return false;
+		return ShutdownHandler::CAN_SHUTDOWN_STATE_FALSE;
 	}
 
 	int count = 0;
-	Entities<Entity>::ENTITYS_MAP& entities =  this->pEntities()->getEntities();
+	Entities<Entity>::ENTITYS_MAP& entities = this->pEntities()->getEntities();
 	Entities<Entity>::ENTITYS_MAP::iterator iter = entities.begin();
-	for(; iter != entities.end(); ++iter)
+	for (; iter != entities.end(); ++iter)
 	{
 		//if(static_cast<Entity*>(iter->second.get())->hasDB())
 		{
@@ -306,16 +307,16 @@ bool Baseapp::canShutdown()
 		}
 	}
 
-	if(count > 0)
+	if (count > 0)
 	{
 		lastShutdownFailReason_ = "destroyHasDBBases";
-		INFO_MSG(fmt::format("Baseapp::canShutdown(): Wait for the entity's into the database! The remaining {}.\n", 
+		INFO_MSG(fmt::format("Baseapp::canShutdown(): Wait for the entity's into the database! The remaining {}.\n",
 			count));
 
-		return false;
+		return ShutdownHandler::CAN_SHUTDOWN_STATE_FALSE;
 	}
 
-	return true;
+	return ShutdownHandler::CAN_SHUTDOWN_STATE_TRUE;
 }
 
 //-------------------------------------------------------------------------------------	
@@ -1069,7 +1070,7 @@ PyObject* Baseapp::__py_createEntityFromDBID(PyObject* self, PyObject* args)
 {
 	int argCount = (int)PyTuple_Size(args);
 	PyObject* pyCallback = NULL;
-	char* entityType = NULL;
+	const char* entityType = NULL;
 	int ret = -1;
 	DBID dbid = 0;
 	PyObject* pyEntityType = NULL;
@@ -1330,7 +1331,7 @@ void Baseapp::onCreateEntityFromDBIDCallback(Network::Channel* pChannel, KBEngin
 			}
 			else
 			{
-				ERROR_MSG(fmt::format("Baseapp::onCreateEntityFromDBID: can't found callback:{}.\n",
+				ERROR_MSG(fmt::format("Baseapp::onCreateEntityFromDBID: not found callback:{}.\n",
 					callbackID));
 			}
 
@@ -1352,6 +1353,12 @@ void Baseapp::onCreateEntityFromDBIDCallback(Network::Channel* pChannel, KBEngin
 		static_cast<Entity*>(e)->dbid(dbInterfaceIndex, dbid);
 		static_cast<Entity*>(e)->initializeEntity(pyDict);
 		Py_DECREF(pyDict);
+
+		KBE_SHA1 sha;
+		uint32 digest[5];
+		sha.Input(s.data(), s.length());
+		sha.Result(digest);
+		static_cast<Entity*>(e)->setDirty((uint32*)&digest[0]);
 	}
 	else
 	{
@@ -1391,7 +1398,7 @@ void Baseapp::onCreateEntityFromDBIDCallback(Network::Channel* pChannel, KBEngin
 		}
 		else
 		{
-			ERROR_MSG(fmt::format("Baseapp::onCreateEntityFromDBID: can't found callback:{}.\n",
+			ERROR_MSG(fmt::format("Baseapp::onCreateEntityFromDBID: not found callback:{}.\n",
 				callbackID));
 		}
 	}
@@ -1402,7 +1409,7 @@ PyObject* Baseapp::__py_createEntityAnywhereFromDBID(PyObject* self, PyObject* a
 {
 	int argCount = (int)PyTuple_Size(args);
 	PyObject* pyCallback = NULL;
-	char* entityType = NULL;
+	const char* entityType = NULL;
 	int ret = -1;
 	DBID dbid = 0;
 	PyObject* pyEntityType = NULL;
@@ -1703,7 +1710,7 @@ void Baseapp::onCreateEntityAnywhereFromDBIDCallback(Network::Channel* pChannel,
 			}
 			else
 			{
-				ERROR_MSG(fmt::format("Baseapp::createEntityAnywhereFromDBID: can't found callback:{}.\n",
+				ERROR_MSG(fmt::format("Baseapp::createEntityAnywhereFromDBID: not found callback:{}.\n",
 					callbackID));
 			}
 
@@ -1792,6 +1799,12 @@ void Baseapp::createEntityAnywhereFromDBIDOtherBaseapp(Network::Channel* pChanne
 		static_cast<Entity*>(e)->dbid(dbInterfaceIndex, dbid);
 		static_cast<Entity*>(e)->initializeEntity(pyDict);
 		Py_DECREF(pyDict);
+
+		KBE_SHA1 sha;
+		uint32 digest[5];
+		sha.Input(s.data(), s.length());
+		sha.Result(digest);
+		static_cast<Entity*>(e)->setDirty((uint32*)&digest[0]);
 	}
 	else
 	{
@@ -1909,7 +1922,7 @@ PyObject* Baseapp::__py_createEntityRemotelyFromDBID(PyObject* self, PyObject* a
 {
 	int argCount = (int)PyTuple_Size(args);
 	PyObject* pyCallback = NULL, *pyEntityCall = NULL;
-	char* entityType = NULL;
+	const char* entityType = NULL;
 	int ret = -1;
 	DBID dbid = 0;
 	PyObject* pyEntityType = NULL;
@@ -2180,7 +2193,7 @@ void Baseapp::onCreateEntityRemotelyFromDBIDCallback(Network::Channel* pChannel,
 			}
 			else
 			{
-				ERROR_MSG(fmt::format("Baseapp::createEntityRemotelyFromDBID: can't found callback:{}.\n",
+				ERROR_MSG(fmt::format("Baseapp::createEntityRemotelyFromDBID: not found callback:{}.\n",
 					callbackID));
 			}
 
@@ -2269,6 +2282,12 @@ void Baseapp::createEntityRemotelyFromDBIDOtherBaseapp(Network::Channel* pChanne
 		static_cast<Entity*>(e)->dbid(dbInterfaceIndex, dbid);
 		static_cast<Entity*>(e)->initializeEntity(pyDict);
 		Py_DECREF(pyDict);
+
+		KBE_SHA1 sha;
+		uint32 digest[5];
+		sha.Input(s.data(), s.length());
+		sha.Result(digest);
+		static_cast<Entity*>(e)->setDirty((uint32*)&digest[0]);
 	}
 	else
 	{
@@ -2700,7 +2719,7 @@ void Baseapp::_onCreateEntityAnywhereCallback(Network::Channel* pChannel, CALLBA
 		}
 		else
 		{
-			ERROR_MSG(fmt::format("Baseapp::onCreateEntityAnywhereCallback: can't found callback:{}.\n",
+			ERROR_MSG(fmt::format("Baseapp::onCreateEntityAnywhereCallback: not found callback:{}.\n",
 				callbackID));
 		}
 
@@ -2735,7 +2754,7 @@ void Baseapp::_onCreateEntityAnywhereCallback(Network::Channel* pChannel, CALLBA
 		}
 		else
 		{
-			ERROR_MSG(fmt::format("Baseapp::onCreateEntityAnywhereCallback: can't found callback:{}.\n",
+			ERROR_MSG(fmt::format("Baseapp::onCreateEntityAnywhereCallback: not found callback:{}.\n",
 				callbackID));
 		}
 	}
@@ -2934,7 +2953,7 @@ void Baseapp::_onCreateEntityRemotelyCallback(Network::Channel* pChannel, CALLBA
 		}
 		else
 		{
-			ERROR_MSG(fmt::format("Baseapp::onCreateEntityRemotelyCallback: can't found callback:{}.\n",
+			ERROR_MSG(fmt::format("Baseapp::onCreateEntityRemotelyCallback: not found callback:{}.\n",
 				callbackID));
 		}
 
@@ -2969,7 +2988,7 @@ void Baseapp::_onCreateEntityRemotelyCallback(Network::Channel* pChannel, CALLBA
 		}
 		else
 		{
-			ERROR_MSG(fmt::format("Baseapp::onCreateEntityRemotelyCallback: can't found callback:{}.\n",
+			ERROR_MSG(fmt::format("Baseapp::onCreateEntityRemotelyCallback: not found callback:{}.\n",
 				callbackID));
 		}
 	}
@@ -3343,7 +3362,7 @@ void Baseapp::onExecuteRawDatabaseCommandCB(Network::Channel* pChannel, KBEngine
 		}
 		else
 		{
-			ERROR_MSG(fmt::format("Baseapp::onExecuteRawDatabaseCommandCB: can't found callback:{}.\n",
+			ERROR_MSG(fmt::format("Baseapp::onExecuteRawDatabaseCommandCB: not found callback:{}.\n",
 				callbackID));
 		}
 	}
@@ -3515,7 +3534,7 @@ void Baseapp::onChargeCB(Network::Channel* pChannel, KBEngine::MemoryStream& s)
 		}
 		else
 		{
-			ERROR_MSG(fmt::format("Baseapp::onChargeCB: can't found callback:{}.\n",
+			ERROR_MSG(fmt::format("Baseapp::onChargeCB: not found callback:{}.\n",
 				callbackID));
 		}
 	}
@@ -3975,6 +3994,9 @@ void Baseapp::reloginBaseapp(Network::Channel* pChannel, std::string& accountNam
 		{
 			pMBChannel->proxyID(0);
 			pMBChannel->condemn("", true);
+			Py_INCREF(entityClientEntityCall);
+			proxy->onClientDeath();
+			proxy->clientEntityCall(entityClientEntityCall);
 		}
 
 		entityClientEntityCall->addr(pChannel->addr());
@@ -4108,6 +4130,12 @@ void Baseapp::onQueryAccountCBFromDbmgr(Network::Channel* pChannel, KBEngine::Me
 	pEntity->initializeEntity(pyDict);
 	Py_DECREF(pyDict);
 
+	KBE_SHA1 sha;
+	uint32 digest[5];
+	sha.Input(s.data(), s.length());
+	sha.Result(digest);
+	pEntity->setDirty((uint32*)&digest[0]);
+
 	if(pClientChannel != NULL)
 	{
 		// 创建entity的客户端entityCall
@@ -4134,6 +4162,12 @@ void Baseapp::onQueryAccountCBFromDbmgr(Network::Channel* pChannel, KBEngine::Me
 		accountName, pEntity->rndUUID(), pEntity->id(), flags, deadline));
 
 	SAFE_RELEASE(ptinfos);
+
+	if (!pClientChannel)
+	{
+		pEntity->onClientDeath();
+	}
+
 	Py_DECREF(pEntity);
 }
 
@@ -4421,8 +4455,8 @@ void Baseapp::onEntityCall(Network::Channel* pChannel, KBEngine::MemoryStream& s
 				EntityCallAbstract* entityCall = static_cast<EntityCallAbstract*>(pEntity->cellEntityCall());
 				if(entityCall == NULL)
 				{
-					WARNING_MSG(fmt::format("Baseapp::onEntityCall: not found cellEntityCall! "
-						"entitycallType={}, entityID={}.\n", calltype, eid));
+					//WARNING_MSG(fmt::format("Baseapp::onEntityCall: not found cellEntityCall! "
+					//	"entitycallType={}, entityID={}.\n", calltype, eid));
 
 					break;
 				}
@@ -4443,9 +4477,9 @@ void Baseapp::onEntityCall(Network::Channel* pChannel, KBEngine::MemoryStream& s
 				EntityCallAbstract* entityCall = static_cast<EntityCallAbstract*>(pEntity->clientEntityCall());
 				if(entityCall == NULL)
 				{
-					WARNING_MSG(fmt::format("Baseapp::onEntityCall: not found clientEntityCall! "
-						"entitycallType={}, entityID={}.\n", 
-						calltype, eid));
+					//WARNING_MSG(fmt::format("Baseapp::onEntityCall: not found clientEntityCall! "
+					//	"entitycallType={}, entityID={}.\n", 
+					//	calltype, eid));
 
 					break;
 				}
@@ -4635,8 +4669,8 @@ void Baseapp::onBackupEntityCellData(Network::Channel* pChannel, KBEngine::Memor
 
 	if(pEntity)
 	{
-		INFO_MSG(fmt::format("Baseapp::onBackupEntityCellData: {}({}), {} bytes.\n",
-			pEntity->scriptName(), entityID, s.length()));
+		//INFO_MSG(fmt::format("Baseapp::onBackupEntityCellData: {}({}), {} bytes.\n",
+		//	pEntity->scriptName(), entityID, s.length()));
 
 		pEntity->onBackupCellData(pChannel, s);
 	}
@@ -5242,7 +5276,7 @@ void Baseapp::deleteEntityByDBIDCB(Network::Channel* pChannel, KBEngine::MemoryS
 		}
 		else
 		{
-			ERROR_MSG(fmt::format("Baseapp::deleteEntityByDBIDCB: can't found callback:{}.\n",
+			ERROR_MSG(fmt::format("Baseapp::deleteEntityByDBIDCB: not found callback:{}.\n",
 				callbackID));
 		}
 	}
@@ -5420,7 +5454,7 @@ void Baseapp::lookUpEntityByDBIDCB(Network::Channel* pChannel, KBEngine::MemoryS
 		}
 		else
 		{
-			ERROR_MSG(fmt::format("Baseapp::lookUpEntityByDBIDCB: can't found callback:{}.\n",
+			ERROR_MSG(fmt::format("Baseapp::lookUpEntityByDBIDCB: not found callback:{}.\n",
 				callbackID));
 		}
 	}

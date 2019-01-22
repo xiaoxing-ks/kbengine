@@ -5,6 +5,7 @@
 #include "scriptdef_module.h"
 #include "datatypes.h"
 #include "common.h"
+#include "py_entitydef.h"
 #include "entity_component.h"
 #include "pyscript/py_memorystream.h"
 #include "resmgr/resmgr.h"
@@ -113,6 +114,9 @@ PyObject* EntityDef::tryGetEntity(COMPONENT_ID componentID, ENTITY_ID entityID)
 void EntityDef::reload(bool fullReload)
 {
 	g_isReload = true;
+
+	script::entitydef::reload(fullReload);
+
 	if(fullReload)
 	{
 		EntityDef::__oldScriptModules.clear();
@@ -229,7 +233,7 @@ bool EntityDef::initialize(std::vector<PyTypeObject*>& scriptBaseTypes,
 	if(loadComponentType == DBMGR_TYPE)
 		return true;
 
-	return loadAllEntityScriptModules(__entitiesPath, scriptBaseTypes) && initializeWatcher();
+	return script::entitydef::initialize(scriptBaseTypes, loadComponentType) && loadAllEntityScriptModules(__entitiesPath, scriptBaseTypes) && initializeWatcher();
 }
 
 //-------------------------------------------------------------------------------------
@@ -661,15 +665,6 @@ bool EntityDef::loadComponents(const std::string& defFilePath,
 			return false;
 		}
 
-		// 尝试加载detailLevel数据
-		if (!loadDetailLevelInfo(defFilePath, componentTypeName, componentXml.get(), componentRootNode, pCompScriptDefModule))
-		{
-			ERROR_MSG(fmt::format("EntityDef::loadComponents: failed to load component:{} DetailLevelInfo.\n",
-				componentTypeName.c_str()));
-
-			return false;
-		}
-
 		// 遍历所有的interface， 并将他们的方法和属性加入到模块中
 		if (!loadInterfaces(defFilePath, componentTypeName, componentXml.get(), componentRootNode, pCompScriptDefModule, true))
 		{
@@ -679,6 +674,24 @@ bool EntityDef::loadComponents(const std::string& defFilePath,
 			return false;
 		}
 		
+		// 加载父类所有的内容
+		if (!loadParentClass(defFilePath + "components/", componentTypeName, componentXml.get(), componentRootNode, pCompScriptDefModule))
+		{
+			ERROR_MSG(fmt::format("EntityDef::loadComponents: failed to load component:{} parentClass.\n",
+				componentTypeName.c_str()));
+
+			return false;
+		}
+
+		// 尝试加载detailLevel数据
+		if (!loadDetailLevelInfo(defFilePath, componentTypeName, componentXml.get(), componentRootNode, pCompScriptDefModule))
+		{
+			ERROR_MSG(fmt::format("EntityDef::loadComponents: failed to load component:{} DetailLevelInfo.\n",
+				componentTypeName.c_str()));
+
+			return false;
+		}
+
 		pCompScriptDefModule->autoMatchCompOwn();
 
 		flags = ED_FLAG_UNKOWN;
@@ -1116,7 +1129,6 @@ bool EntityDef::loadDefPropertys(const std::string& moduleName,
 				std::transform(indexType.begin(), indexType.end(), 
 					indexType.begin(), toupper);
 			}
-			
 
 			TiXmlNode* identifierNode = xml->enterNode(defPropertyNode->FirstChild(), "Identifier");
 			if(identifierNode)
@@ -1738,6 +1750,8 @@ bool EntityDef::checkDefMethod(ScriptDefModule* pScriptModule,
 				else
 				{
 					PyObject* pyGetMethodArgsResult = PyObject_GetAttrString(pyGetMethodArgs, const_cast<char *>("args"));
+					Py_DECREF(pyGetMethodArgs);
+
 					if (!pyGetMethodArgsResult)
 					{
 						SCRIPT_ERROR_CHECK();
@@ -1774,7 +1788,7 @@ bool EntityDef::checkDefMethod(ScriptDefModule* pScriptModule,
 
 						if (iter->second->isExposed())
 						{
-							if (iter->second->isExposed() != MethodDescription::EXPOSED_AND_CALLER_CHECK)
+							if (iter->second->isExposed() != MethodDescription::EXPOSED_AND_CALLER_CHECK && iter->second->isCell())
 							{
 								WARNING_MSG(fmt::format("EntityDef::checkDefMethod: exposed of method: {}.{}{}!\n",
 									moduleName.c_str(), iter->first.c_str(), (iter->second->isExposed() == MethodDescription::EXPOSED_AND_CALLER_CHECK ?
@@ -1782,8 +1796,6 @@ bool EntityDef::checkDefMethod(ScriptDefModule* pScriptModule,
 							}
 						}
 					}
-
-					Py_DECREF(pyGetMethodArgs);
 				}
 			}
 
@@ -1841,9 +1853,13 @@ PyObject* EntityDef::loadScriptModule(std::string moduleName)
 		std::string userScriptsPath = Resmgr::getSingleton().getPyUserScriptsPath();
 		std::string pyModulePath = "";
 
-		const char *pModulePath = PyModule_GetFilename(pyModule);
-		if (pModulePath)
-			pyModulePath = pModulePath;
+		PyObject *fileobj = NULL;
+
+		fileobj = PyModule_GetFilenameObject(pyModule);
+		if (fileobj)
+			pyModulePath = PyUnicode_AsUTF8(fileobj);
+
+		Py_DECREF(fileobj);  
 
 		strutil::kbe_replace(userScriptsPath, "/", "");
 		strutil::kbe_replace(userScriptsPath, "\\", "");
@@ -2317,6 +2333,7 @@ bool EntityDef::installScript(PyObject* mod)
 	FixedArray::installScript(NULL);
 	FixedDict::installScript(NULL);
 	VolatileInfo::installScript(NULL);
+	script::entitydef::installModule("Def");
 
 	_isInit = true;
 	return true;
@@ -2333,15 +2350,16 @@ bool EntityDef::uninstallScript()
 		FixedArray::uninstallScript();
 		FixedDict::uninstallScript();
 		VolatileInfo::uninstallScript();
+		script::entitydef::uninstallModule();
 	}
 
-	return EntityDef::finalise();
+	return script::entitydef::finalise() && EntityDef::finalise();
 }
 
 //-------------------------------------------------------------------------------------
 bool EntityDef::initializeWatcher()
 {
-	return true;
+	return script::entitydef::initializeWatcher();
 }
 
 //-------------------------------------------------------------------------------------

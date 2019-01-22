@@ -9,7 +9,8 @@
 #include "pystruct.h"
 #include "py_gc.h"
 #include "pyurl.h"
-#include "install_py_dlls.h"
+#include "py_compression.h"
+#include "py_platform.h"
 #include "resmgr/resmgr.h"
 #include "thread/concurrency.h"
 
@@ -195,12 +196,6 @@ bool Script::install(const wchar_t* pythonHomeDir, std::wstring pyPaths,
 	// 注册产生uuid方法到py
 	APPEND_SCRIPT_MODULE_METHOD(module_,		genUUID64,			__py_genUUID64,					METH_VARARGS,			0);
 
-	if(!install_py_dlls())
-	{
-		ERROR_MSG("Script::install(): install_py_dlls() is failed!\n");
-		return false;
-	}
-
 	// 安装py重定向模块
 	ScriptStdOut::installScript(NULL);
 	ScriptStdErr::installScript(NULL);
@@ -240,6 +235,8 @@ bool Script::install(const wchar_t* pythonHomeDir, std::wstring pyPaths,
 	PyStruct::initialize();
 	Copy::initialize();
 	PyUrl::initialize(this);
+	PyCompression::initialize();
+	PyPlatform::initialize();
 	SCRIPT_ERROR_CHECK();
 
 	math::installModule("Math");
@@ -256,6 +253,8 @@ bool Script::uninstall()
 	PyStruct::finalise();
 	Copy::finalise();
 	PyUrl::finalise();
+	PyCompression::finalise();
+	PyPlatform::finalise();
 	SCRIPT_ERROR_CHECK();
 
 	if(pyStdouterr_)
@@ -269,12 +268,6 @@ bool Script::uninstall()
 
 	ScriptStdOut::uninstallScript();
 	ScriptStdErr::uninstallScript();
-
-	if(!uninstall_py_dlls())
-	{
-		ERROR_MSG("Script::uninstall(): uninstall_py_dlls() is failed!\n");
-		return false;
-	}
 
 	PyGC::initialize();
 
